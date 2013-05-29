@@ -294,7 +294,11 @@ sub upload_file_to_flickr {
 
     my $path_lcp = encode_to_local_cp( $path );
 
-    my $tags = join( ' ', gen_tags( $path_lcp ) );
+     # get filename
+    my $title = ( split /[\/\\]/, $path )[-1];
+    $title =~ s/ [.] [^.]* $ //x;
+
+    my $tags = join( ' ', map { qq{"$_"} } gen_tags( $path_lcp ) );
 
     print $tags ? "(tags $tags)..." : '(no tags)...';
 
@@ -302,6 +306,7 @@ sub upload_file_to_flickr {
         photo      => $path_lcp ,
         auth_token => $options{auth_token},
         tags       => $tags,
+        title      => $title,
         map { $_ => $options{ $_ } }
             grep { defined $options{ $_ } }
             qw ( is_public is_friend is_family hidden ),
