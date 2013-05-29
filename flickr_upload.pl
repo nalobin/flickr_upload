@@ -259,7 +259,7 @@ sub upload_file_to_flickr {
 
     my $tags = join( ' ', gen_tags( $path ) );
 
-    print "(tags $tags)" || "(no tags)";
+    print "(tags $tags)..." || '(no tags)...';
 
     my $id = $api->upload(
         photo      => $path,
