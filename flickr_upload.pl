@@ -16,6 +16,7 @@ use Pod::Usage;
 use utf8;
 use Encode;
 use Number::Bytes::Human qw( format_bytes );
+use List::MoreUtils qw( uniq );
  
 use File::Find;
 use File::Copy;
@@ -295,16 +296,12 @@ sub upload_file_to_flickr {
 
     my $tags = join( ' ', gen_tags( $path_lcp ) );
 
-    my ( $filename ) = $path =~ m{ [/\\] ( [^/\\]+? ) $ }x;
-    $filename =~ s/[.][^.]*$//; # remove extension
-
     print $tags ? "(tags $tags)..." : '(no tags)...';
 
     my $id = $api->upload(
         photo      => $path_lcp ,
         auth_token => $options{auth_token},
         tags       => $tags,
-        title      => $filename,
         map { $_ => $options{ $_ } }
             grep { defined $options{ $_ } }
             qw ( is_public is_friend is_family hidden ),
@@ -345,7 +342,23 @@ sub gen_tags {
 
     my ( $year ) = split /-/, $date;
 
-    return $year, $date;
+    # Get dir names as tags
+    my $path = decode_from_local_cp( $path_lcp );
+
+    my @dir_tags;
+    for my $dir ( sort { length $b <=> length $a } @dirs ) {
+        next unless $path =~ /^$dir/;
+        # strip off root dir
+        $path =~ s/^$dir//;
+
+        @dir_tags = grep { length $_ } split /[\/\\]/, $path;
+        pop @dir_tags; # remove filename
+
+        last;
+    }
+
+
+    return uniq $year, $date, @dir_tags;
 }
 
 sub get_file_hash {
