@@ -336,7 +336,7 @@ sub upload_file_to_flickr {
 sub gen_tags {
     my ( $path_lcp ) = @_;
 
-    my $info_ref = eval { ImageInfo( $path_lcp, { DateFormat => "%Y-%m-%d" } ) } // {};
+    my $info_ref = eval { ImageInfo( $path_lcp, { DateFormat => "%Y_%m_%d" } ) } // {};
 
     my $date = $info_ref->{DateTimeOriginal}
             // $info_ref->{CreateDate}
