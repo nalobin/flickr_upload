@@ -1,0 +1,4 @@
+This script uploads JPEG files to flickr.com account.
+It maintains local photo DB to check for file changes of local photos directory.
+Files removed locally can be removed from flickr.
+Changed files will be reuploaded. 
