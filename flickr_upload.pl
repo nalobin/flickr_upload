@@ -13,9 +13,34 @@ use File::Find;
 use Getopt::Long;
 use Image::ExifTool qw( :Public );
 use Pod::Usage;
+use utf8;
+use Encode;
+use Number::Bytes::Human qw( format_bytes );
+ 
+use File::Find;
+use File::Copy;
+use File::Path;
+use File::Basename;
+ 
+binmode STDOUT, ':utf8';
+binmode STDERR, ':utf8';
 
 autoflush STDERR 1;
 autoflush STDOUT 1;
+
+my $is_windows = $^O =~ /win/i;
+
+my $encoding;
+if ( $is_windows ) {
+    require 'Win32/Codepage/Simple.pm';
+    $encoding = Win32::Codepage::Simple::get_codepage();
+
+    if ( $encoding eq '1251' ) {
+       $encoding = 'cp1251';
+    }
+
+    system 'chcp 65001';
+}
 
 my $dbh;
 my @dirs;
@@ -74,7 +99,9 @@ sub get_options {
     pod2usage( 'No dirs in args' ) unless @ARGV;
 
     for my $dir ( @ARGV ) {
-        unless ( -d $dir ) {
+        $dir = decode_from_local_cp( $dir );
+
+        unless ( -d encode_to_local_cp( $dir ) ) {
             warn "Directory $dir does not exist and will be skipped.\n";
             next;
         }
@@ -161,6 +188,9 @@ sub process_removed_and_changed_files {
     my $db_files_ref = $dbh->selectall_arrayref( 'SELECT * FROM files', { Slice => {} } );
 
     for my $file_ref ( @$db_files_ref ) {
+
+        my $path_lcp = encode_to_local_cp( $file_ref->{path} );
+
         # Check if file is (or was) in one of the dirs
         unless ( grep { $file_ref->{path} =~ /^$_/ } @dirs ) {
             warn "File $file_ref->{path} is not in directories. Skipping...\n";
@@ -168,7 +198,7 @@ sub process_removed_and_changed_files {
         }
 
         # Check if we should remove file remotely
-        if ( $options{delete} && !-e $file_ref->{path}  ) {
+        if ( $options{delete} && !-e $path_lcp ) {
             print "Found locally removed file $file_ref->{path}. Removing remotely...";
             ++$processed;
             if ( remove_file_from_flickr( $file_ref->{path}, $file_ref->{flickr_id} ) ) {
@@ -177,11 +207,11 @@ sub process_removed_and_changed_files {
             next;
         }
 
-        next unless -w $file_ref->{path};
+        next unless -w $path_lcp;
 
         # Check if file was changed
-        if ( -s $file_ref->{path} != $file_ref->{size}
-            || $file_ref->{hash} ne get_file_hash( $file_ref->{path} )
+        if ( -s $path_lcp != $file_ref->{size}
+            || $file_ref->{hash} ne get_file_hash( $path_lcp )
         ) {
             print "Found locally changed file $file_ref->{path}. Removing remotely...";
             ++$processed;
@@ -216,12 +246,14 @@ sub remove_file_from_flickr {
 sub process_new_files {
     my $processed = 0;
 
+    my @dirs_lcp = map { encode_to_local_cp( $_ ) } @dirs;
+
     if ( $options{recursive} ) {
-        find( sub { check_and_upload_file( $File::Find::name, \$processed ) }, @dirs );
+        find( sub { check_and_upload_file( $File::Find::name, \$processed ) }, @dirs_lcp );
     }
     else {
         # no recurse
-        for my $dir ( @dirs ) {
+        for my $dir ( @dirs_lcp ) {
             check_and_upload_file( $_, \$processed ) for glob "$dir/*";
         }
     }
@@ -231,13 +263,15 @@ sub process_new_files {
 
 # Checks if this file should be upload and uploads if nesessary.
 sub check_and_upload_file {
-    my ( $path, $processed_ref ) = @_;
+    my ( $path_lcp, $processed_ref ) = @_;
 
-    return if -d $path;
+    return if -d $path_lcp;
 
-    return unless -s $path;
+    return unless -s $path_lcp;
 
-    return unless $path =~ /jpe?g$/i;
+    return unless $path_lcp =~ /jpe?g$/i;
+
+    my $path = decode_from_local_cp( $path_lcp );
 
     # Check if file is already uploaded
     return if scalar $dbh->selectrow_array(
@@ -246,8 +280,8 @@ sub check_and_upload_file {
 
     my $new = !exists $changed_files{ $path };
 
-    printf 'Uploading %s file %s (%.1fMb)...', $new ? 'new' : 'changed',
-        $path, ( -s $path ) / 1024 / 1024;
+    printf 'Uploading %s file %s (%s)...', $new ? 'new' : 'changed',
+        $path, get_bytes_human( -s $path_lcp );
 
     ++$$processed_ref;
 
@@ -257,14 +291,20 @@ sub check_and_upload_file {
 sub upload_file_to_flickr {
     my ( $path ) = @_;
 
-    my $tags = join( ' ', gen_tags( $path ) );
+    my $path_lcp = encode_to_local_cp( $path );
 
-    print "(tags $tags)..." || '(no tags)...';
+    my $tags = join( ' ', gen_tags( $path_lcp ) );
+
+    my ( $filename ) = $path =~ m{ [/\\] ( [^/\\]+? ) $ }x;
+    $filename =~ s/[.][^.]*$//; # remove extension
+
+    print $tags ? "(tags $tags)..." : '(no tags)...';
 
     my $id = $api->upload(
-        photo      => $path,
+        photo      => $path_lcp ,
         auth_token => $options{auth_token},
         tags       => $tags,
+        title      => $filename,
         map { $_ => $options{ $_ } }
             grep { defined $options{ $_ } }
             qw ( is_public is_friend is_family hidden ),
@@ -279,8 +319,8 @@ sub upload_file_to_flickr {
         ', 
         undef,
         $path,
-        -s $path,
-        get_file_hash( $path ),
+        -s $path_lcp,
+        get_file_hash( $path_lcp ),
         $id,        
     ) or do {
         warn "Internal error while inserting in local DB\n";
@@ -292,19 +332,16 @@ sub upload_file_to_flickr {
 
 # Generates tags list for the photo
 sub gen_tags {
-    my ( $path ) = @_;
+    my ( $path_lcp ) = @_;
 
-    my $info_ref = eval {
-        ImageInfo( $path, { DateFormat => "%Y-%m-%d" } )
-    } // {};
+    my $info_ref = eval { ImageInfo( $path_lcp, { DateFormat => "%Y-%m-%d" } ) } // {};
 
-    my $date = $info_ref->{CreateDate}
-            // $info_ref->{DateTimeOriginal}
+    my $date = $info_ref->{DateTimeOriginal}
+            // $info_ref->{CreateDate}
+            // $info_ref->{FileCreateDate}
             // $info_ref->{ModifyDate};
 
-    if ( $@ || !$date ) {
-        return ();
-    };
+    return () unless $date;
 
     my ( $year ) = split /-/, $date;
 
@@ -312,15 +349,49 @@ sub gen_tags {
 }
 
 sub get_file_hash {
-    my ( $path ) = @_;
+    my ( $path_lcp ) = @_;
 
-    open my $fh, $path or die "Can not open file. $@";
+    open my $fh, $path_lcp or die "Can not open file. $@";
 
     my $digest = Digest::SHA1->new->addfile( $fh )->hexdigest;
 
     close $fh;
 
     return $digest;
+}
+
+# Возвращает человекочитаемый размер файла
+sub get_bytes_human {
+    my ( $size ) = @_;
+
+    return '-' unless $size;
+
+    my $str = format_bytes( $size, base => 1000 );
+
+    my ( $q, $units ) = $str =~ /([\d.]+)([^\d]*)/;
+    $units //= '';
+
+    return "$q ${units}b";
+}
+
+sub decode_from_local_cp {
+    my ( $str ) = @_;
+
+    return $str unless $encoding;
+
+    Encode::from_to( $str, $encoding, 'utf8' );
+
+    return $str;
+}
+
+sub encode_to_local_cp {
+    my ( $str ) = @_;
+
+    return $str unless $encoding;
+
+    Encode::from_to( $str, 'utf8', $encoding );
+
+    return $str;
 }
 
 __END__
