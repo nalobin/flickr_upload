@@ -286,7 +286,14 @@ sub check_and_upload_file {
 
     ++$$processed_ref;
 
-    say 'done.' if upload_file_to_flickr( $path );
+    my $id;
+    for ( 1 .. 5 ) {
+        next unless $id = upload_file_to_flickr( $path );
+        say 'done.';
+        last;
+    }
+
+    die unless $id; # will not continue after some tries
 }
 
 sub upload_file_to_flickr {
@@ -302,16 +309,18 @@ sub upload_file_to_flickr {
 
     print $tags ? "(tags $tags)..." : '(no tags)...';
 
-    my $id = $api->upload(
-        photo      => $path_lcp ,
-        auth_token => $options{auth_token},
-        tags       => $tags,
-        title      => $title,
-        map { $_ => $options{ $_ } }
-            grep { defined $options{ $_ } }
-            qw ( is_public is_friend is_family hidden ),
-    ) or do {
-        warn "failed!\n";
+    my $id = eval {
+        $api->upload(
+            photo      => $path_lcp ,
+            auth_token => $options{auth_token},
+            tags       => $tags,
+            title      => $title,
+            map { $_ => $options{ $_ } }
+                grep { defined $options{ $_ } }
+                qw ( is_public is_friend is_family hidden ),
+        );
+    } or do {
+        warn "failed: $@!\n";
         return undef;
     };
 
