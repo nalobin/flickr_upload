@@ -185,10 +185,12 @@ sub connect_db {
 
 sub process_removed_and_changed_files {
     my $processed = 0;
+    my $scanned = 0;
 
     my $db_files_ref = $dbh->selectall_arrayref( 'SELECT * FROM files', { Slice => {} } );
 
     for my $file_ref ( @$db_files_ref ) {
+        say "Scanned $scanned files" if  ++$scanned % 100 == 0;
 
         my $path_lcp = encode_to_local_cp( $file_ref->{path} );
 
