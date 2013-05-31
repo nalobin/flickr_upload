@@ -23,9 +23,6 @@ use File::Copy;
 use File::Path;
 use File::Basename;
  
-binmode STDOUT, ':utf8';
-binmode STDERR, ':utf8';
-
 autoflush STDERR 1;
 autoflush STDOUT 1;
 
@@ -42,6 +39,10 @@ if ( $is_windows ) {
 
     system 'chcp 65001';
 }
+else {
+    binmode STDOUT, ':utf8';
+    binmode STDERR, ':utf8';
+}
 
 my $dbh;
 my @dirs;
@@ -49,8 +50,9 @@ my %changed_files;
 
 # default options
 my %options = (
-    delete => 1, 
+    delete    => 1, 
     recursive => 0,
+    nodigest  => 0,
 );
 
 get_options();
@@ -87,6 +89,7 @@ sub get_options {
         'family=i'     => \$options{is_family},
         'hidden=i'     => \$options{hidden},
         r              => \$options{recursive},
+        nodigest       => \$options{nodigest},
     ) or pod2usage( 2 );
     pod2usage(1) if $help;
 
@@ -214,7 +217,7 @@ sub process_removed_and_changed_files {
 
         # Check if file was changed
         if ( -s $path_lcp != $file_ref->{size}
-            || $file_ref->{hash} ne get_file_hash( $path_lcp )
+            || !$options{nodigest} && $file_ref->{hash} ne get_file_hash( $path_lcp )
         ) {
             print "Found locally changed file $file_ref->{path}. Removing remotely...";
             ++$processed;
@@ -291,6 +294,7 @@ sub check_and_upload_file {
     my $id;
     for ( 1 .. 5 ) {
         next unless $id = upload_file_to_flickr( $path );
+
         say 'done.';
         last;
     }
@@ -320,11 +324,13 @@ sub upload_file_to_flickr {
             map { $_ => $options{ $_ } }
                 grep { defined $options{ $_ } }
                 qw ( is_public is_friend is_family hidden ),
-        );
-    } or do {
+        )
+    };
+
+    if ( $@ || !$id ) {
         warn "failed: $@!\n";
         return undef;
-    };
+    }
 
     $dbh->do( '
         INSERT INTO files  ( path, size, hash, flickr_id )
@@ -432,7 +438,7 @@ flickr_upload - Upload photos to C<flickr.com>
 =head1 SYNOPSIS
  
 flickr_upload.pl [--auth] --auth_token <auth_token>
-    --key <key> --secret <secret> [--r <0|1>]
+    --key <key> --secret <secret> [--r <0|1>] [--nodigest]
     [--del <0|1>] [--public <0|1>] [--friend <0|1>]
     [--family <0|1>] [--hidden <0|1>] 
     <directories...>
@@ -484,6 +490,10 @@ Override the default C<hidden> option. Hidden files (2) will not be in search re
 =item --r <0|1>
  
 Recurse into directories. Optional.
+
+=item --nodigest <0|1>
+ 
+Do not check file digest in favor of speed. Optional.
 
 =item --del <0|1>
  
